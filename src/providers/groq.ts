@@ -117,7 +117,7 @@ export class GroqProvider extends BaseProvider {
         }
     }
 
-    async chatWithTools(messages: Message[], tools: ToolDefinition[], system?: string): Promise<ChatResponse> {
+    async chatWithTools(messages: Message[], tools: ToolDefinition[], system?: string, signal?: AbortSignal): Promise<ChatResponse> {
         const openaiMessages: any[] = [];
 
         // Add system prompt first
@@ -169,7 +169,7 @@ export class GroqProvider extends BaseProvider {
                 messages: openaiMessages as any,
                 tools: toolsConfig as any,
                 tool_choice: 'auto'
-            });
+            }, signal ? { signal } : undefined);
 
             const choice = response.choices[0];
             const message = choice.message;
@@ -192,6 +192,13 @@ export class GroqProvider extends BaseProvider {
             };
 
         } catch (error: any) {
+            // Detect user-initiated abort
+            if (error?.name === 'AbortError' || signal?.aborted) {
+                return {
+                    type: 'error',
+                    content: 'Request cancelled by user.'
+                };
+            }
             return {
                 type: 'error',
                 content: error?.message || 'Unknown error during Groq API call'

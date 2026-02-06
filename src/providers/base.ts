@@ -24,7 +24,8 @@ export abstract class BaseProvider {
     abstract chatWithTools(
         messages: Message[],
         tools: ToolDefinition[],
-        system?: string
+        system?: string,
+        signal?: AbortSignal
     ): Promise<ChatResponse>;
 
     // Dynamic model fetching — override in subclass

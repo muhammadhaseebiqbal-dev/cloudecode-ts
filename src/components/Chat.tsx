@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, Static, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
@@ -12,6 +12,7 @@ import { TOOLS } from '../tools/definitions';
 import { SystemPromptManager } from '../core/prompt';
 import { getContextUsage, ContextUsage } from '../core/context';
 import { LOGO_LINES, TAGLINE, clearScreen } from '../branding';
+import { GroqProvider } from '../providers/groq';
 import { estimateTokens, estimateMessageTokens } from '../core/context';
 import { SessionManager } from '../core/session';
 
@@ -23,10 +24,12 @@ const SEND_BUDGET_RATIO = 0.80; // use max 80% of limit for input, leave 20% for
 const DANGEROUS_TOOLS = ['run_command', 'write_file', 'stop_process'];
 
 const SLASH_COMMANDS = [
+    { cmd: '/key',     desc: 'Change API key (enter new key inline)' },
     { cmd: '/reset',   desc: 'Reset API key & return to setup' },
     { cmd: '/clear',   desc: 'Clear chat history' },
     { cmd: '/restore', desc: 'Restore context from last backup' },
-    { cmd: '/model',   desc: 'Show current model' },
+    { cmd: '/model',   desc: 'Change model (shows available list)' },
+    { cmd: '/exit',    desc: 'Exit Cloude Code' },
     { cmd: '/help',    desc: 'Show available commands' },
 ];
 
@@ -66,6 +69,10 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
     const [permissionPrompt, setPermissionPrompt] = useState<PermissionPrompt | null>(null);
     const [sessionAllowed, setSessionAllowed] = useState<Set<string>>(new Set());
     const [contextUsage, setContextUsage] = useState<ContextUsage>({ usedTokens: 0, maxTokens: 32768, percentage: 0 });
+    const [awaitingKey, setAwaitingKey] = useState(false);
+    const [awaitingModel, setAwaitingModel] = useState(false);
+    const [availableModels, setAvailableModels] = useState<{id: string, contextWindow: number}[]>([]);
+    const abortRef = useRef<AbortController | null>(null);
 
     const currentModel = config.getProviderConfig('groq')?.model || 'qwen-2.5-coder-32b';
 
@@ -109,8 +116,14 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
         setTimeout(() => setReady(true), 80);
     }, []);
 
-    // Handle permission input
-    useInput((ch: string) => {
+    // Handle permission input + Escape to cancel
+    useInput((ch: string, key: any) => {
+        // Escape cancels in-flight request
+        if (key.escape && isProcessing && abortRef.current) {
+            abortRef.current.abort();
+            return;
+        }
+
         if (!permissionPrompt) return;
 
         if (ch === 'y' || ch === 'Y') {
@@ -151,28 +164,59 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
         );
         SessionManager.backup();
 
+        // Build process state string for the summary prompt
+        const procSnap = executor.getProcessSnapshot();
+        const procState = procSnap.length > 0
+            ? '\n\nACTIVE BACKGROUND PROCESSES:\n' + procSnap.map(p =>
+                `- ${p.id}: ${p.command} (${p.running ? 'RUNNING' : 'EXITED'}, pid:${p.pid}${p.port ? ', port:' + p.port : ''}, since ${p.startTime})`
+            ).join('\n')
+            : '';
+
         const summaryPrompt: Message = {
             role: 'user',
-            content: 'Summarize our conversation so far in a compact format. Include:\n- What the user asked for (the original task)\n- Files created or modified (with paths)\n- Current state of the task (what is done, what remains)\n- Any errors encountered\n- Key technical decisions\nFormat as bullet points. Be very concise. This summary will replace the conversation history so include everything needed to continue the task seamlessly.'
+            content: `The conversation context is being compacted. Generate a structured summary that will REPLACE the entire conversation history. The next message after this summary will continue the task, so include ALL information needed.
+
+Format your summary EXACTLY like this:
+
+## TASK
+[What the user originally asked for, and the overall goal]
+
+## COMPLETED
+[Bullet list of everything done so far, with file paths and key details]
+
+## FILES MODIFIED
+[List every file created/modified with its path and what it contains]
+
+## CURRENT STATE
+[What is working, what was the last action taken, what is the immediate next step]
+
+## PENDING
+[What remains to be done]
+
+## ERRORS & DECISIONS
+[Any errors encountered and how they were resolved, key technical decisions made]
+
+## ENVIRONMENT
+- Working directory: ${process.cwd()}
+- Platform: ${process.platform}${procState}
+
+Be thorough and specific. Include exact file paths, package names, port numbers, commands used. This summary is the AI's ONLY memory of the conversation.`
         };
 
         try {
             const systemPrompt = SystemPromptManager.getSystemPrompt();
             const response = await currentProvider.chatWithTools(
                 [...currentProvider.conversationHistory, summaryPrompt],
-                [],  // no tools for summary
+                [],
                 systemPrompt
             );
 
             const summary = response.content || 'Previous conversation context.';
 
-            // Clear and replace with compact context
-            // Use 'assistant' role so the AI treats it as its own memory, not something to respond to
             currentProvider.clearHistory();
-            currentProvider.addMessage('user', '[The conversation was compacted to save context. Below is a summary of everything so far. Continue from where you left off.]');
-            currentProvider.addMessage('assistant', `Here is my summary of our work so far:\n${summary}\n\nI will continue from where I left off.`);
+            currentProvider.addMessage('user', '[CONTEXT COMPACTED] The conversation was compacted to save context. Below is a comprehensive summary of everything so far. Continue the task from where you left off. Do NOT re-do completed work.');
+            currentProvider.addMessage('assistant', summary);
 
-            // Notify user (UI only — NOT added to provider history)
             const compactMsg: Message = {
                 role: 'system',
                 content: `Context compacted (was ${contextUsage.percentage}%). Summary preserved.`
@@ -278,6 +322,13 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
             return;
         }
 
+        // Check if cancelled
+        if (abortRef.current?.signal.aborted) {
+            const cancelMsg: Message = { role: 'system', content: 'Request cancelled.' };
+            setMessages(prev => [...prev, cancelMsg]);
+            return;
+        }
+
         try {
             const systemPrompt = SystemPromptManager.getSystemPrompt();
 
@@ -287,11 +338,18 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
             const response = await currentProvider.chatWithTools(
                 currentProvider.conversationHistory,
                 TOOLS,
-                systemPrompt
+                systemPrompt,
+                abortRef.current?.signal
             );
 
             if (response.type === 'error') {
                 const errContent = response.content || 'Unknown error';
+                // Handle user cancellation cleanly
+                if (errContent.includes('cancelled by user') || abortRef.current?.signal.aborted) {
+                    const cancelMsg: Message = { role: 'system', content: 'Request cancelled.' };
+                    setMessages(prev => [...prev, cancelMsg]);
+                    return;
+                }
                 // Handle 413 / rate limit errors by auto-compacting and retrying once
                 if (errContent.includes('413') || errContent.includes('Request too large') || errContent.includes('tokens per minute')) {
                     setStatus('Request too large, compacting context...');
@@ -334,6 +392,13 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
                 currentProvider.addMessage('assistant', response.content || '', { tool_calls: response.tool_calls });
 
                 for (const call of response.tool_calls) {
+                    // Check abortion between tool calls
+                    if (abortRef.current?.signal.aborted) {
+                        const cancelMsg: Message = { role: 'system', content: 'Request cancelled.' };
+                        setMessages(prev => [...prev, cancelMsg]);
+                        return;
+                    }
+
                     setStatus(`Running ${call.name}...`);
 
                     const allowed = await requestPermission(call.name, call.arguments);
@@ -383,25 +448,105 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
         if (!value.trim() || !provider) return;
         const trimmed = value.trim();
 
+        // Model input mode: next input is the new model name or number
+        if (awaitingModel) {
+            setInput('');
+            setAwaitingModel(false);
+            const newModel = trimmed;
+            if (!newModel || newModel.startsWith('/')) {
+                const cancelMsg: Message = { role: 'system', content: 'Model change cancelled.' };
+                setMessages(prev => [...prev, cancelMsg]);
+                setAvailableModels([]);
+                return;
+            }
+            // Check if user typed a number to select from the list
+            const num = parseInt(newModel, 10);
+            let selectedModel = newModel;
+            if (!isNaN(num) && num >= 1 && num <= availableModels.length) {
+                selectedModel = availableModels[num - 1].id;
+            }
+            setAvailableModels([]);
+            config.setModel('groq', selectedModel);
+            // Reinitialize provider with new model
+            try {
+                const p = getProvider();
+                const systemPrompt = SystemPromptManager.getSystemPrompt();
+                p.setSystemPrompt(systemPrompt);
+                // Preserve conversation history
+                if (provider) {
+                    p.conversationHistory = provider.conversationHistory;
+                    p.systemPrompt = provider.systemPrompt;
+                }
+                setProvider(p);
+                updateContextUsage(p);
+                const okMsg: Message = { role: 'system', content: `Model changed to: ${selectedModel}` };
+                setMessages(prev => [...prev, okMsg]);
+            } catch (err: any) {
+                const errMsg: Message = { role: 'system', content: `Failed to switch model: ${err.message}` };
+                setMessages(prev => [...prev, errMsg]);
+            }
+            return;
+        }
+
+        // Key input mode: next input is treated as the new API key
+        if (awaitingKey) {
+            setInput('');
+            setAwaitingKey(false);
+            const newKey = trimmed;
+            if (!newKey || newKey.startsWith('/')) {
+                const cancelMsg: Message = { role: 'system', content: 'Key change cancelled.' };
+                setMessages(prev => [...prev, cancelMsg]);
+                return;
+            }
+            config.setApiKey('groq', newKey);
+            // Reinitialize provider with new key
+            try {
+                const p = getProvider();
+                const systemPrompt = SystemPromptManager.getSystemPrompt();
+                p.setSystemPrompt(systemPrompt);
+                // Preserve conversation history
+                if (provider) {
+                    p.conversationHistory = provider.conversationHistory;
+                    p.systemPrompt = provider.systemPrompt;
+                }
+                setProvider(p);
+                updateContextUsage(p);
+                const masked = newKey.substring(0, 8) + '...' + newKey.substring(newKey.length - 4);
+                const okMsg: Message = { role: 'system', content: `API key updated: ${masked}` };
+                setMessages(prev => [...prev, okMsg]);
+            } catch (err: any) {
+                const errMsg: Message = { role: 'system', content: `Failed to reinitialize provider: ${err.message}` };
+                setMessages(prev => [...prev, errMsg]);
+            }
+            return;
+        }
+
         if (trimmed.startsWith('/')) {
             setInput('');
             switch (trimmed) {
+                case '/key': {
+                    setAwaitingKey(true);
+                    const keyPromptMsg: Message = { role: 'system', content: 'Enter your new Groq API key (paste it and press Enter):' };
+                    setMessages(prev => [...prev, keyPromptMsg]);
+                    return;
+                }
                 case '/reset':
                     config.config.providers.groq = { name: 'Groq', model: 'qwen-2.5-coder-32b', enabled: true };
                     config.config.provider = 'groq';
                     config.save();
                     SessionManager.clear();
+                    setMessages([]);
                     clearScreen();
                     onReset();
                     return;
                 case '/clear':
-                    clearScreen();
                     setMessages([]);
                     if (provider) {
                         provider.clearHistory();
                         updateContextUsage(provider);
                     }
                     SessionManager.clear();
+                    clearScreen();
                     return;
                 case '/restore': {
                     const backup = SessionManager.restoreBackup();
@@ -421,8 +566,32 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
                 }
                 case '/model': {
                     const model = config.getProviderConfig('groq')?.model || 'unknown';
-                    const sysMsg: Message = { role: 'system', content: `Model: ${model}` };
-                    setMessages(prev => [...prev, sysMsg]);
+                    const apiKey = config.getProviderConfig('groq')?.apiKey;
+                    setAwaitingModel(true);
+                    // Fetch available models
+                    const fetchingMsg: Message = { role: 'system', content: `Current model: ${model}\nFetching available models...` };
+                    setMessages(prev => [...prev, fetchingMsg]);
+                    if (apiKey) {
+                        GroqProvider.fetchModels(apiKey).then(models => {
+                            setAvailableModels(models);
+                            const list = models.map((m: any, i: number) => {
+                                const ctx = m.contextWindow >= 1024 ? `${Math.round(m.contextWindow / 1024)}k` : `${m.contextWindow}`;
+                                const active = m.id === model ? ' (active)' : '';
+                                return `  ${i + 1}. ${m.id}  [${ctx}]${active}`;
+                            }).join('\n');
+                            const listMsg: Message = { role: 'system', content: `Available models:\n${list}\n\nType a number or model name to switch:` };
+                            setMessages(prev => [...prev, listMsg]);
+                        });
+                    } else {
+                        const noKeyMsg: Message = { role: 'system', content: 'No API key configured. Use /key first.' };
+                        setMessages(prev => [...prev, noKeyMsg]);
+                        setAwaitingModel(false);
+                    }
+                    return;
+                }
+                case '/exit': {
+                    clearScreen();
+                    process.exit(0);
                     return;
                 }
                 case '/help': {
@@ -444,6 +613,7 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
         setInput('');
         setIsProcessing(true);
         setStatus('Thinking...');
+        abortRef.current = new AbortController();
 
         try {
             provider.addMessage('user', value);
@@ -455,6 +625,7 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
             const errorMsg: Message = { role: 'system', content: `Error: ${error?.message || error}` };
             setMessages(prev => [...prev, errorMsg]);
         } finally {
+            abortRef.current = null;
             setIsProcessing(false);
             setStatus('');
         }
@@ -507,6 +678,8 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
             case 'run_command':     return { label: 'CMD',        color: '#FFA500' };
             case 'stop_process':    return { label: 'STOP',       color: '#FF6B6B' };
             case 'list_processes':  return { label: 'PROC',       color: '#87CEEB' };
+            case 'get_logs':        return { label: 'LOGS',       color: '#87CEEB' };
+            case 'fetch_url':       return { label: 'FETCH',      color: '#DA70D6' };
             default:                return { label: 'TOOL',       color: '#888' };
         }
     };
@@ -579,17 +752,229 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
             );
         }
 
-        // Write file results
+        // Write file results — unified diff with line numbers + word highlights
         if (msg.tool_name === 'write_file') {
             const action = header['UPDATED'] ? 'Updated' : header['CREATED'] ? 'Created' : 'Wrote';
             const filePath = header['UPDATED'] || header['CREATED'] || '';
+            const changes = header['CHANGES'] || '';
+            const isUpdate = !!header['UPDATED'];
+            const fileName = filePath.split(/[\\/]/).pop() || filePath;
+
+            // Parse diff lines from body
+            const bodyLines = body.trim().split('\n');
+            const maxDisplayLines = 40;
+
+            // Parse into structured rows
+            type DiffRow = {
+                type: 'hunk' | 'add' | 'del' | 'context' | 'summary';
+                lineOld?: number;
+                lineNew?: number;
+                content: string;
+                highlights?: [number, number][];
+            };
+
+            const rows: DiffRow[] = [];
+            let currentOldLine = 0;
+            let currentNewLine = 0;
+
+            let li = 0;
+            // Summary line
+            if (bodyLines.length > 0 && (/^\d+ additions/.test(bodyLines[0]) || bodyLines[0].startsWith('NEW FILE'))) {
+                rows.push({ type: 'summary', content: bodyLines[0] });
+                li = 1;
+            }
+
+            while (li < bodyLines.length) {
+                const line = bodyLines[li];
+
+                if (line.startsWith('@@')) {
+                    // Parse line numbers from hunk header
+                    const hunkMatch = line.match(/@@ -(\d+),\d+ \+(\d+),\d+ @@/);
+                    if (hunkMatch) {
+                        currentOldLine = parseInt(hunkMatch[1]);
+                        currentNewLine = parseInt(hunkMatch[2]);
+                    }
+                    rows.push({ type: 'hunk', content: line });
+                    li++;
+                    continue;
+                }
+
+                // Collect del/add blocks for word-level highlighting
+                if (line.startsWith('- ') || line.startsWith('-\t')) {
+                    const dels: string[] = [];
+                    const adds: string[] = [];
+                    while (li < bodyLines.length && (bodyLines[li].startsWith('- ') || bodyLines[li].startsWith('-\t'))) {
+                        dels.push(bodyLines[li].substring(2));
+                        li++;
+                    }
+                    while (li < bodyLines.length && (bodyLines[li].startsWith('+ ') || bodyLines[li].startsWith('+\t'))) {
+                        adds.push(bodyLines[li].substring(2));
+                        li++;
+                    }
+
+                    // Emit del lines with word highlights
+                    for (let d = 0; d < dels.length; d++) {
+                        let hl: [number, number][] | undefined;
+                        if (d < adds.length) {
+                            // Find changed segment
+                            const oldStr = dels[d];
+                            const newStr = adds[d];
+                            let pre = 0;
+                            while (pre < Math.min(oldStr.length, newStr.length) && oldStr[pre] === newStr[pre]) pre++;
+                            let suf = 0;
+                            while (suf < Math.min(oldStr.length - pre, newStr.length - pre) &&
+                                   oldStr[oldStr.length - 1 - suf] === newStr[newStr.length - 1 - suf]) suf++;
+                            const chLen = oldStr.length - pre - suf;
+                            if (chLen > 0 && chLen < oldStr.length) hl = [[pre, chLen]];
+                        }
+                        rows.push({ type: 'del', lineOld: currentOldLine++, content: dels[d], highlights: hl });
+                    }
+                    // Emit add lines with word highlights
+                    for (let a = 0; a < adds.length; a++) {
+                        let hl: [number, number][] | undefined;
+                        if (a < dels.length) {
+                            const oldStr = dels[a];
+                            const newStr = adds[a];
+                            let pre = 0;
+                            while (pre < Math.min(oldStr.length, newStr.length) && oldStr[pre] === newStr[pre]) pre++;
+                            let suf = 0;
+                            while (suf < Math.min(oldStr.length - pre, newStr.length - pre) &&
+                                   oldStr[oldStr.length - 1 - suf] === newStr[newStr.length - 1 - suf]) suf++;
+                            const chLen = newStr.length - pre - suf;
+                            if (chLen > 0 && chLen < newStr.length) hl = [[pre, chLen]];
+                        }
+                        rows.push({ type: 'add', lineNew: currentNewLine++, content: adds[a], highlights: hl });
+                    }
+                    continue;
+                }
+
+                if (line.startsWith('+ ') || line.startsWith('+\t')) {
+                    rows.push({ type: 'add', lineNew: currentNewLine++, content: line.substring(2) });
+                    li++;
+                    continue;
+                }
+
+                if (line.startsWith('...')) {
+                    rows.push({ type: 'summary', content: line });
+                    li++;
+                    continue;
+                }
+
+                // Context line
+                rows.push({ type: 'context', lineOld: currentOldLine++, lineNew: currentNewLine++, content: line });
+                li++;
+            }
+
+            const displayRows = rows.slice(0, maxDisplayLines);
+            const hasMore = rows.length > maxDisplayLines;
+
+            // Line number column width
+            const LN_W = 4;
+            const padNum = (n?: number): string => {
+                if (n === undefined) return ' '.repeat(LN_W);
+                const s = String(n);
+                return s.length >= LN_W ? s : ' '.repeat(LN_W - s.length) + s;
+            };
+
+            // Render a line with word-level highlighting
+            const renderHighlightedLine = (content: string, baseColor: string, highlights?: [number, number][]) => {
+                if (!highlights || highlights.length === 0) {
+                    return <Text color={baseColor}>{content}</Text>;
+                }
+                const parts: React.ReactElement[] = [];
+                let pos = 0;
+                for (let hi = 0; hi < highlights.length; hi++) {
+                    const [start, len] = highlights[hi];
+                    if (start > pos) {
+                        parts.push(<Text key={`n${hi}`} color={baseColor}>{content.substring(pos, start)}</Text>);
+                    }
+                    const hlBg = baseColor === '#FF6B6B' ? '#5c1a1a' : '#1a3a1a';
+                    parts.push(<Text key={`h${hi}`} color={baseColor} bold backgroundColor={hlBg}>{content.substring(start, start + len)}</Text>);
+                    pos = start + len;
+                }
+                if (pos < content.length) {
+                    parts.push(<Text key="rest" color={baseColor}>{content.substring(pos)}</Text>);
+                }
+                return <>{parts}</>;
+            };
+
             return (
-                <Box paddingLeft={2}>
-                    <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
-                    <Text color="#00D26A">{`${action}: `}</Text>
-                    <Text color="white">{filePath}</Text>
-                    {header['SIZE'] ? (
-                        <Text color="#555">{` (${header['SIZE']})`}</Text>
+                <Box paddingLeft={2} flexDirection="column">
+                    {/* Header bar */}
+                    <Box borderStyle="round" borderColor="#333" paddingX={1} justifyContent="space-between">
+                        <Box>
+                            <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
+                            <Text color="white" bold>{fileName}</Text>
+                            <Text color="#555">{` ${filePath}`}</Text>
+                        </Box>
+                        <Box>
+                            {changes ? (
+                                <Box>
+                                    <Text color="#00D26A" bold>{changes.split(' ')[0]}</Text>
+                                    <Text color="#555">{' '}</Text>
+                                    <Text color="#FF6B6B" bold>{changes.split(' ')[1] || ''}</Text>
+                                </Box>
+                            ) : null}
+                            {header['SIZE'] ? (
+                                <Text color="#555">{` ${header['SIZE']}`}</Text>
+                            ) : null}
+                        </Box>
+                    </Box>
+
+                    {/* Diff block */}
+                    {displayRows.length > 0 ? (
+                        <Box flexDirection="column">
+                            {displayRows.map((row, idx) => {
+                                if (row.type === 'summary') {
+                                    return <Text key={idx} color="#888">{`  ${row.content}`}</Text>;
+                                }
+                                if (row.type === 'hunk') {
+                                    return (
+                                        <Box key={idx}>
+                                            <Text color="#333">{' '.repeat(LN_W) + ' ' + ' '.repeat(LN_W) + ' '}</Text>
+                                            <Text color="#00BFFF">{row.content}</Text>
+                                        </Box>
+                                    );
+                                }
+                                if (row.type === 'context') {
+                                    return (
+                                        <Box key={idx}>
+                                            <Text color="#444">{padNum(row.lineOld)}</Text>
+                                            <Text color="#333">{' '}</Text>
+                                            <Text color="#444">{padNum(row.lineNew)}</Text>
+                                            <Text color="#333">{'  '}</Text>
+                                            <Text color="#555">{row.content}</Text>
+                                        </Box>
+                                    );
+                                }
+                                if (row.type === 'del') {
+                                    return (
+                                        <Box key={idx}>
+                                            <Text color="#FF6B6B">{padNum(row.lineOld)}</Text>
+                                            <Text color="#333">{' '}</Text>
+                                            <Text color="#333">{' '.repeat(LN_W)}</Text>
+                                            <Text color="#FF6B6B" bold>{' -'}</Text>
+                                            {renderHighlightedLine(row.content, '#FF6B6B', row.highlights)}
+                                        </Box>
+                                    );
+                                }
+                                if (row.type === 'add') {
+                                    return (
+                                        <Box key={idx}>
+                                            <Text color="#333">{' '.repeat(LN_W)}</Text>
+                                            <Text color="#333">{' '}</Text>
+                                            <Text color="#00D26A">{padNum(row.lineNew)}</Text>
+                                            <Text color="#00D26A" bold>{' +'}</Text>
+                                            {renderHighlightedLine(row.content, '#00D26A', row.highlights)}
+                                        </Box>
+                                    );
+                                }
+                                return null;
+                            })}
+                            {hasMore ? (
+                                <Text color="#555">{`  ... (${rows.length - maxDisplayLines} more lines)`}</Text>
+                            ) : null}
+                        </Box>
                     ) : null}
                 </Box>
             );
@@ -650,6 +1035,55 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
                     {truncatedBody.trim() ? (
                         <Box paddingLeft={2}>
                             <Text color="#666" wrap="wrap">{truncatedBody.trim()}</Text>
+                        </Box>
+                    ) : null}
+                </Box>
+            );
+        }
+
+        // Get logs
+        if (msg.tool_name === 'get_logs') {
+            return (
+                <Box paddingLeft={2} flexDirection="column">
+                    <Box>
+                        <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
+                        <Text color="white">{header['COMMAND'] || header['PROCESS_ID'] || ''}</Text>
+                        {header['STATUS'] ? (
+                            <Text color={header['STATUS'] === 'running' ? '#00D26A' : '#FF6B6B'}>{` (${header['STATUS']})`}</Text>
+                        ) : null}
+                        {header['RUNTIME'] ? (
+                            <Text color="#555">{` ${header['RUNTIME']}`}</Text>
+                        ) : null}
+                    </Box>
+                    {truncatedBody.trim() ? (
+                        <Box paddingLeft={2}>
+                            <Text color="#777" wrap="wrap">{truncatedBody.trim()}</Text>
+                        </Box>
+                    ) : null}
+                </Box>
+            );
+        }
+
+        // Fetch URL
+        if (msg.tool_name === 'fetch_url') {
+            const url = header['URL'] || '';
+            const status = header['STATUS'] || '';
+            const size = header['SIZE'] || '';
+            return (
+                <Box paddingLeft={2} flexDirection="column">
+                    <Box>
+                        <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
+                        <Text color="#87CEEB">{url}</Text>
+                        {status ? (
+                            <Text color={status.startsWith('2') ? '#00D26A' : '#FF6B6B'}>{` (${status})`}</Text>
+                        ) : null}
+                        {size ? (
+                            <Text color="#555">{` ${size}`}</Text>
+                        ) : null}
+                    </Box>
+                    {truncatedBody.trim() ? (
+                        <Box paddingLeft={2}>
+                            <Text color="#666" wrap="wrap">{truncatedBody.trim().substring(0, 600)}{truncatedBody.trim().length > 600 ? '...' : ''}</Text>
                         </Box>
                     ) : null}
                 </Box>
@@ -732,6 +1166,7 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
                 <Box>
                     <Spinner type="dots" />
                     <Text color="#666">{' '}{status}</Text>
+                    <Text color="#444">{' (Esc to cancel)'}</Text>
                 </Box>
             ) : null}
 
@@ -759,15 +1194,29 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
             </Box>
 
             {!isProcessing && ready && !permissionPrompt ? (
-                <Box borderStyle="round" borderColor="#00D26A" paddingX={1}>
-                    <Text color="#00D26A">{'> '}</Text>
-                    <TextInput
-                        value={input}
-                        onChange={setInput}
-                        onSubmit={handleSubmit}
-                        placeholder="Type a message... (/ for commands)"
-                        focus={true}
-                    />
+                <Box flexDirection="column">
+                    <Box borderStyle="round" borderColor={awaitingKey ? '#FFD700' : awaitingModel ? '#87CEEB' : '#00D26A'} paddingX={1}>
+                        <Text color={awaitingKey ? '#FFD700' : awaitingModel ? '#87CEEB' : '#00D26A'}>{awaitingKey ? 'KEY> ' : awaitingModel ? 'MODEL> ' : '> '}</Text>
+                        <TextInput
+                            value={input}
+                            onChange={setInput}
+                            onSubmit={handleSubmit}
+                            placeholder={awaitingKey ? 'Paste your API key here...' : awaitingModel ? 'Enter number or model name...' : 'Type a message... (/ for commands)'}
+                            focus={true}
+                        />
+                    </Box>
+                    {input.startsWith('/') && !awaitingKey && !awaitingModel ? (
+                        <Box flexDirection="column" paddingLeft={3}>
+                            {SLASH_COMMANDS
+                                .filter(c => c.cmd.startsWith(input.trim()) || input.trim() === '/')
+                                .map((c, i) => (
+                                    <Box key={i}>
+                                        <Text color="#00D26A" bold>{c.cmd}</Text>
+                                        <Text color="#555">{`  ${c.desc}`}</Text>
+                                    </Box>
+                                ))}
+                        </Box>
+                    ) : null}
                 </Box>
             ) : null}
         </Box>
