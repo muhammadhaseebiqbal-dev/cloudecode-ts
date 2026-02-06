@@ -5,6 +5,7 @@ import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
 import { config } from '../core/config';
 import { GroqProvider } from '../providers/groq';
+import { LOGO_LINES, TAGLINE } from '../branding';
 
 interface SetupProps {
     onComplete: () => void;
@@ -66,7 +67,7 @@ function buildModelList(models: any[]): any[] {
 }
 
 export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
-    const [step, setStep] = useState<'apikey' | 'verify' | 'models'>('apikey');
+    const [step, setStep] = useState<'apikey' | 'verify' | 'models' | 'probing'>('apikey');
     const [apiKey, setApiKey] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [isValidating, setIsValidating] = useState(false);
@@ -78,6 +79,18 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
     const selectableIndices = availableModels
         .map((m, i) => (m.isHeader ? -1 : i))
         .filter(i => i !== -1);
+
+    const selectModel = async (model: any) => {
+        setStep('probing');
+
+        // Probe rate limits for the selected model
+        const savedKey = config.getProviderConfig('groq')?.apiKey || apiKey;
+        const tpmLimit = await GroqProvider.probeRateLimit(savedKey, model.id);
+
+        config.setModel('groq', model.id, model.contextWindow, tpmLimit || undefined);
+        config.save();
+        onComplete();
+    };
 
     useInput((_input, key) => {
         if (step !== 'models') return;
@@ -109,9 +122,7 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
         if (key.return) {
             const selectedModel = availableModels[selectedModelIdx];
             if (selectedModel && !selectedModel.isHeader) {
-                config.setModel('groq', selectedModel.id);
-                config.save();
-                onComplete();
+                selectModel(selectedModel);
             }
         }
     });
@@ -161,7 +172,15 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
 
     if (step === 'apikey') {
         return (
-            <Box flexDirection="column" borderStyle="round" borderColor="#00D26A" paddingX={2}>
+            <Box flexDirection="column">
+                <Box flexDirection="column">
+                    {LOGO_LINES.map((line, i) => (
+                        <Text key={i} color="#00D26A">{line}</Text>
+                    ))}
+                    <Text color="#555">{TAGLINE}</Text>
+                    <Text>{' '}</Text>
+                </Box>
+                <Box flexDirection="column" borderStyle="round" borderColor="#00D26A" paddingX={2}>
                 <Text bold color="#00D26A">{'Setup — Groq'}</Text>
                 <Text color="grey">{'Enter your API key to get started.'}</Text>
                 <Text color="#666">{'https://console.groq.com/keys'}</Text>
@@ -176,16 +195,26 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
                     />
                 </Box>
                 {error ? <Text color="red">{`${error}`}</Text> : null}
+                </Box>
             </Box>
         );
     }
 
     if (step === 'verify') {
         return (
-            <Box flexDirection="column" borderStyle="round" borderColor="#00D26A" paddingX={2}>
+            <Box flexDirection="column">
+                <Box flexDirection="column">
+                    {LOGO_LINES.map((line, i) => (
+                        <Text key={i} color="#00D26A">{line}</Text>
+                    ))}
+                    <Text color="#555">{TAGLINE}</Text>
+                    <Text>{' '}</Text>
+                </Box>
+                <Box flexDirection="column" borderStyle="round" borderColor="#00D26A" paddingX={2}>
                 <Box>
                     <Spinner type="dots" />
                     <Text color="#666">{' Validating key & fetching models...'}</Text>
+                </Box>
                 </Box>
             </Box>
         );
@@ -201,7 +230,15 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
         const currentPos = selectableIndices.indexOf(selectedModelIdx) + 1;
 
         return (
-            <Box flexDirection="column" borderStyle="round" borderColor="#00D26A" paddingX={2}>
+            <Box flexDirection="column">
+                <Box flexDirection="column">
+                    {LOGO_LINES.map((line, i) => (
+                        <Text key={i} color="#00D26A">{line}</Text>
+                    ))}
+                    <Text color="#555">{TAGLINE}</Text>
+                    <Text>{' '}</Text>
+                </Box>
+                <Box flexDirection="column" borderStyle="round" borderColor="#00D26A" paddingX={2}>
                 <Text bold color="#00D26A">{'Select Model'}</Text>
                 <Text color="#666">{`${currentPos}/${totalSelectable}  |  up/down: navigate  |  enter: select`}</Text>
 
@@ -228,6 +265,27 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
                 })}
 
                 {hasMore ? <Text color="#555">{'  ...'}</Text> : null}
+                </Box>
+            </Box>
+        );
+    }
+
+    if (step === 'probing') {
+        return (
+            <Box flexDirection="column">
+                <Box flexDirection="column">
+                    {LOGO_LINES.map((line, i) => (
+                        <Text key={i} color="#00D26A">{line}</Text>
+                    ))}
+                    <Text color="#555">{TAGLINE}</Text>
+                    <Text>{' '}</Text>
+                </Box>
+                <Box flexDirection="column" borderStyle="round" borderColor="#00D26A" paddingX={2}>
+                    <Box>
+                        <Spinner type="dots" />
+                        <Text color="#666">{' Detecting rate limits for your plan...'}</Text>
+                    </Box>
+                </Box>
             </Box>
         );
     }

@@ -33,6 +33,36 @@ export class GroqProvider extends BaseProvider {
         }
     }
 
+    /**
+     * Probe the API with a tiny request to discover the TPM limit from response headers.
+     * Returns the x-ratelimit-limit-tokens value (TPM) for the given model.
+     */
+    static async probeRateLimit(apiKey: string, model: string): Promise<number | null> {
+        try {
+            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    model,
+                    messages: [{ role: 'user', content: 'hi' }],
+                    max_tokens: 1
+                })
+            });
+
+            const tpmHeader = response.headers.get('x-ratelimit-limit-tokens');
+            if (tpmHeader) {
+                const tpm = parseInt(tpmHeader, 10);
+                if (!isNaN(tpm) && tpm > 0) return tpm;
+            }
+            return null;
+        } catch {
+            return null;
+        }
+    }
+
     static async fetchModels(apiKey: string): Promise<any[]> {
         try {
             const response = await fetch('https://api.groq.com/openai/v1/models', {

@@ -4,6 +4,7 @@ export interface Message {
     content: string;
     tool_calls?: ToolCall[];
     tool_call_id?: string;
+    tool_name?: string;
 }
 
 export interface ToolCall {
@@ -22,6 +23,8 @@ export interface ProviderConfig {
     name: string;
     apiKey?: string;
     model?: string;
+    contextWindow?: number;
+    tpmLimit?: number;
     enabled?: boolean;
 }
 

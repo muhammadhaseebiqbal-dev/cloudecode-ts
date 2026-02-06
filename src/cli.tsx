@@ -3,25 +3,9 @@
 import React from 'react';
 import { render } from 'ink';
 import App from './components/App';
+import { clearScreen } from './branding';
 
-// Print logo once to stdout before Ink takes over
-const LOGO = `
-\x1b[38;2;0;210;106m   ██████╗██╗      ██████╗ ██╗   ██╗██████╗ ███████╗
-  ██╔════╝██║     ██╔═══██╗██║   ██║██╔══██╗██╔════╝
-  ██║     ██║     ██║   ██║██║   ██║██║  ██║█████╗  
-  ██║     ██║     ██║   ██║██║   ██║██║  ██║██╔══╝  
-  ╚██████╗███████╗╚██████╔╝╚██████╔╝██████╔╝███████╗
-   ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝ ╚══════╝
-                   ██████╗ ██████╗ ██████╗ ███████╗
-                  ██╔════╝██╔═══██╗██╔══██╗██╔════╝
-                  ██║     ██║   ██║██║  ██║█████╗  
-                  ██║     ██║   ██║██║  ██║██╔══╝  
-                  ╚██████╗╚██████╔╝██████╔╝███████╗
-                   ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝\x1b[0m
-\x1b[90m    Open Source AI Terminal\x1b[0m
-`;
-console.clear();
-console.log(LOGO);
+clearScreen();
 
 // Render with proper Ink configuration
 const { unmount, waitUntilExit } = render(<App />, {

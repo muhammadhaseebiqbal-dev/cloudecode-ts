@@ -87,11 +87,17 @@ export class ConfigManager {
         this.save();
     }
 
-    setModel(provider: string, model: string) {
+    setModel(provider: string, model: string, contextWindow?: number, tpmLimit?: number) {
         if (!this.config.providers[provider]) {
             this.config.providers[provider] = { name: provider };
         }
         this.config.providers[provider].model = model;
+        if (contextWindow) {
+            this.config.providers[provider].contextWindow = contextWindow;
+        }
+        if (tpmLimit) {
+            this.config.providers[provider].tpmLimit = tpmLimit;
+        }
         this.save();
     }
 }
