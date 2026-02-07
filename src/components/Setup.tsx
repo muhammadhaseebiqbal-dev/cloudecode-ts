@@ -158,7 +158,8 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
 
     useEffect(() => {
         // Auto-detect existing provider config
-        const currentProvider = config.config.provider || 'groq';
+        const currentProvider = config.config.provider;
+        if (!currentProvider) return; // No provider set — stay on provider picker
         const providerInfo = PROVIDERS.find(p => p.id === currentProvider);
         if (providerInfo) {
             setChosenProvider(providerInfo);

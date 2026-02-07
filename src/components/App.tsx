@@ -48,11 +48,13 @@ const App = () => {
         config.save();
         modelChangeRef.current = { model };
         fullClear();
+        setChatKey(prev => prev + 1);
         setView('chat');
     };
 
     const handleModelCancel = () => {
         fullClear();
+        setChatKey(prev => prev + 1);
         setView('chat');
     };
 

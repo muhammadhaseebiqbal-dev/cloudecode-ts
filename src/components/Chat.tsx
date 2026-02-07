@@ -69,7 +69,6 @@ export const Chat: React.FC<ChatProps> = ({ onReset, onClear, onModelChange, mod
     const [provider, setProvider] = useState<BaseProvider | null>(null);
     const [status, setStatus] = useState('');
     const [initError, setInitError] = useState<string | null>(null);
-    const [ready, setReady] = useState(false);
     const [permissionPrompt, setPermissionPrompt] = useState<PermissionPrompt | null>(null);
     const [sessionAllowed, setSessionAllowed] = useState<Set<string>>(new Set());
     const [contextUsage, setContextUsage] = useState<ContextUsage>({ usedTokens: 0, maxTokens: 32768, percentage: 0 });
@@ -115,18 +114,17 @@ export const Chat: React.FC<ChatProps> = ({ onReset, onClear, onModelChange, mod
         } catch (err: any) {
             setInitError(err?.message || 'Failed to initialize provider');
         }
-        setTimeout(() => setReady(true), 80);
     }, []);
 
     // Apply model change from App-level ModelPicker when returning
     useEffect(() => {
-        if (modelChangeRef.current && ready) {
+        if (modelChangeRef.current && provider) {
             const { model } = modelChangeRef.current;
             modelChangeRef.current = null;
             const okMsg: Message = { role: 'system', content: `Model changed to: ${model.id}` };
             setMessages(prev => [...prev, okMsg]);
         }
-    }, [ready]);
+    }, [provider]);
 
     // Handle permission input + Escape to cancel
     useInput((ch: string, key: any) => {
@@ -546,6 +544,9 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                     return;
                 }
                 case '/provider': {
+                    // Clear provider selection so Setup starts at provider picker
+                    config.config.provider = '';
+                    config.save();
                     onReset();
                     return;
                 }
@@ -1188,7 +1189,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                 <Text color="#444">{`${tokensK}k/${maxK}k`}</Text>
             </Box>
 
-            {!isProcessing && ready && !permissionPrompt ? (
+            {!isProcessing && !permissionPrompt ? (
                 <Box flexDirection="column">
                     <Box borderStyle="round" borderColor={awaitingKey ? '#FFD700' : '#00D26A'} paddingX={1}>
                         <Text color={awaitingKey ? '#FFD700' : '#00D26A'}>{awaitingKey ? 'KEY> ' : '> '}</Text>
