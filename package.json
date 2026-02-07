@@ -1,13 +1,18 @@
 {
     "name": "cloudecode-ts",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Cloudé Code CLI - Agentic AI Coding Assistant",
     "main": "dist/cli.js",
     "bin": {
         "cloudecode": "dist/cli.js"
     },
+    "files": [
+        "dist",
+        "config.md"
+    ],
     "scripts": {
         "build": "tsc",
+        "prepublishOnly": "npm run build",
         "dev": "ts-node src/cli.tsx",
         "start": "node dist/cli.js",
         "test": "jest"
@@ -39,5 +44,14 @@
         "@types/react": "^17.0.39",
         "ts-node": "^10.9.2",
         "typescript": "^5.4.5"
-    }
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/muhammadhaseebiqbal-dev/cloudecode-ts.git"
+    },
+    "type": "commonjs",
+    "bugs": {
+        "url": "https://github.com/muhammadhaseebiqbal-dev/cloudecode-ts/issues"
+    },
+    "homepage": "https://github.com/muhammadhaseebiqbal-dev/cloudecode-ts#readme"
 }

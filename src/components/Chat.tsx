@@ -11,8 +11,8 @@ import { ToolExecutor } from '../tools/execution';
 import { TOOLS } from '../tools/definitions';
 import { SystemPromptManager } from '../core/prompt';
 import { getContextUsage, ContextUsage } from '../core/context';
-import { LOGO_LINES, TAGLINE, clearScreen } from '../branding';
-import { GroqProvider } from '../providers/groq';
+import { LOGO_LINES, TAGLINE } from '../branding';
+import { fullClear } from '../core/ink';
 import { estimateTokens, estimateMessageTokens } from '../core/context';
 import { SessionManager } from '../core/session';
 
@@ -24,17 +24,21 @@ const SEND_BUDGET_RATIO = 0.80; // use max 80% of limit for input, leave 20% for
 const DANGEROUS_TOOLS = ['run_command', 'write_file', 'stop_process'];
 
 const SLASH_COMMANDS = [
-    { cmd: '/key',     desc: 'Change API key (enter new key inline)' },
-    { cmd: '/reset',   desc: 'Reset API key & return to setup' },
-    { cmd: '/clear',   desc: 'Clear chat history' },
-    { cmd: '/restore', desc: 'Restore context from last backup' },
-    { cmd: '/model',   desc: 'Change model (shows available list)' },
-    { cmd: '/exit',    desc: 'Exit Cloude Code' },
-    { cmd: '/help',    desc: 'Show available commands' },
+    { cmd: '/key',      desc: 'Change API key (enter new key inline)' },
+    { cmd: '/reset',    desc: 'Reset API key & return to setup' },
+    { cmd: '/clear',    desc: 'Clear chat history' },
+    { cmd: '/restore',  desc: 'Restore context from last backup' },
+    { cmd: '/model',    desc: 'Change model (shows available list)' },
+    { cmd: '/provider', desc: 'Return to Provider Setup' },
+    { cmd: '/exit',     desc: 'Exit Cloude Code' },
+    { cmd: '/help',     desc: 'Show available commands' },
 ];
 
 interface ChatProps {
     onReset: () => void;
+    onClear: () => void;
+    onModelChange: () => void;
+    modelChangeRef: React.MutableRefObject<{ model: { id: string; contextWindow: number } } | null>;
 }
 
 type PermissionPrompt = {
@@ -58,8 +62,8 @@ function contextColor(pct: number): string {
     return 'red';
 }
 
-export const Chat: React.FC<ChatProps> = ({ onReset }) => {
-    const [messages, setMessages] = useState<Message[]>([]);
+export const Chat: React.FC<ChatProps> = ({ onReset, onClear, onModelChange, modelChangeRef }) => {
+    const [messages, setMessages] = useState<Message[]>([{ role: 'system', content: '__branding__' }]);
     const [input, setInput] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [provider, setProvider] = useState<BaseProvider | null>(null);
@@ -70,8 +74,6 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
     const [sessionAllowed, setSessionAllowed] = useState<Set<string>>(new Set());
     const [contextUsage, setContextUsage] = useState<ContextUsage>({ usedTokens: 0, maxTokens: 32768, percentage: 0 });
     const [awaitingKey, setAwaitingKey] = useState(false);
-    const [awaitingModel, setAwaitingModel] = useState(false);
-    const [availableModels, setAvailableModels] = useState<{id: string, contextWindow: number}[]>([]);
     const abortRef = useRef<AbortController | null>(null);
 
     const currentModel = config.getProviderConfig('groq')?.model || 'qwen-2.5-coder-32b';
@@ -115,6 +117,16 @@ export const Chat: React.FC<ChatProps> = ({ onReset }) => {
         }
         setTimeout(() => setReady(true), 80);
     }, []);
+
+    // Apply model change from App-level ModelPicker when returning
+    useEffect(() => {
+        if (modelChangeRef.current && ready) {
+            const { model } = modelChangeRef.current;
+            modelChangeRef.current = null;
+            const okMsg: Message = { role: 'system', content: `Model changed to: ${model.id}` };
+            setMessages(prev => [...prev, okMsg]);
+        }
+    }, [ready]);
 
     // Handle permission input + Escape to cancel
     useInput((ch: string, key: any) => {
@@ -448,46 +460,6 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
         if (!value.trim() || !provider) return;
         const trimmed = value.trim();
 
-        // Model input mode: next input is the new model name or number
-        if (awaitingModel) {
-            setInput('');
-            setAwaitingModel(false);
-            const newModel = trimmed;
-            if (!newModel || newModel.startsWith('/')) {
-                const cancelMsg: Message = { role: 'system', content: 'Model change cancelled.' };
-                setMessages(prev => [...prev, cancelMsg]);
-                setAvailableModels([]);
-                return;
-            }
-            // Check if user typed a number to select from the list
-            const num = parseInt(newModel, 10);
-            let selectedModel = newModel;
-            if (!isNaN(num) && num >= 1 && num <= availableModels.length) {
-                selectedModel = availableModels[num - 1].id;
-            }
-            setAvailableModels([]);
-            config.setModel('groq', selectedModel);
-            // Reinitialize provider with new model
-            try {
-                const p = getProvider();
-                const systemPrompt = SystemPromptManager.getSystemPrompt();
-                p.setSystemPrompt(systemPrompt);
-                // Preserve conversation history
-                if (provider) {
-                    p.conversationHistory = provider.conversationHistory;
-                    p.systemPrompt = provider.systemPrompt;
-                }
-                setProvider(p);
-                updateContextUsage(p);
-                const okMsg: Message = { role: 'system', content: `Model changed to: ${selectedModel}` };
-                setMessages(prev => [...prev, okMsg]);
-            } catch (err: any) {
-                const errMsg: Message = { role: 'system', content: `Failed to switch model: ${err.message}` };
-                setMessages(prev => [...prev, errMsg]);
-            }
-            return;
-        }
-
         // Key input mode: next input is treated as the new API key
         if (awaitingKey) {
             setInput('');
@@ -498,7 +470,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                 setMessages(prev => [...prev, cancelMsg]);
                 return;
             }
-            config.setApiKey('groq', newKey);
+            config.setApiKey(config.config.provider || 'groq', newKey);
             // Reinitialize provider with new key
             try {
                 const p = getProvider();
@@ -531,22 +503,18 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                     return;
                 }
                 case '/reset':
-                    config.config.providers.groq = { name: 'Groq', model: 'qwen-2.5-coder-32b', enabled: true };
+                    config.config.providers = {};
                     config.config.provider = 'groq';
                     config.save();
                     SessionManager.clear();
-                    setMessages([]);
-                    clearScreen();
                     onReset();
                     return;
                 case '/clear':
-                    setMessages([]);
                     if (provider) {
                         provider.clearHistory();
-                        updateContextUsage(provider);
                     }
                     SessionManager.clear();
-                    clearScreen();
+                    onClear();
                     return;
                 case '/restore': {
                     const backup = SessionManager.restoreBackup();
@@ -565,32 +533,24 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                     return;
                 }
                 case '/model': {
-                    const model = config.getProviderConfig('groq')?.model || 'unknown';
-                    const apiKey = config.getProviderConfig('groq')?.apiKey;
-                    setAwaitingModel(true);
-                    // Fetch available models
-                    const fetchingMsg: Message = { role: 'system', content: `Current model: ${model}\nFetching available models...` };
-                    setMessages(prev => [...prev, fetchingMsg]);
-                    if (apiKey) {
-                        GroqProvider.fetchModels(apiKey).then(models => {
-                            setAvailableModels(models);
-                            const list = models.map((m: any, i: number) => {
-                                const ctx = m.contextWindow >= 1024 ? `${Math.round(m.contextWindow / 1024)}k` : `${m.contextWindow}`;
-                                const active = m.id === model ? ' (active)' : '';
-                                return `  ${i + 1}. ${m.id}  [${ctx}]${active}`;
-                            }).join('\n');
-                            const listMsg: Message = { role: 'system', content: `Available models:\n${list}\n\nType a number or model name to switch:` };
-                            setMessages(prev => [...prev, listMsg]);
-                        });
-                    } else {
-                        const noKeyMsg: Message = { role: 'system', content: 'No API key configured. Use /key first.' };
-                        setMessages(prev => [...prev, noKeyMsg]);
-                        setAwaitingModel(false);
+                    // Save session before unmounting for model picker
+                    if (provider) {
+                        SessionManager.save(
+                            provider.conversationHistory,
+                            messages,
+                            currentModel,
+                            process.cwd()
+                        );
                     }
+                    onModelChange();
+                    return;
+                }
+                case '/provider': {
+                    onReset();
                     return;
                 }
                 case '/exit': {
-                    clearScreen();
+                    fullClear();
                     process.exit(0);
                     return;
                 }
@@ -679,6 +639,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
             case 'stop_process':    return { label: 'STOP',       color: '#FF6B6B' };
             case 'list_processes':  return { label: 'PROC',       color: '#87CEEB' };
             case 'get_logs':        return { label: 'LOGS',       color: '#87CEEB' };
+            case 'send_input':      return { label: 'INPUT',      color: '#FFD700' };
             case 'fetch_url':       return { label: 'FETCH',      color: '#DA70D6' };
             default:                return { label: 'TOOL',       color: '#888' };
         }
@@ -744,7 +705,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                         ) : null}
                     </Box>
                     {truncatedBody.trim() ? (
-                        <Box paddingLeft={2}>
+                        <Box paddingLeft={2} width="100%">
                             <Text color="#777" wrap="wrap">{truncatedBody.trim()}</Text>
                         </Box>
                     ) : null}
@@ -868,13 +829,22 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
             const displayRows = rows.slice(0, maxDisplayLines);
             const hasMore = rows.length > maxDisplayLines;
 
-            // Line number column width
-            const LN_W = 4;
+            // Compute line number column width based on max line number in display
+            let maxLineNum = 1;
+            for (const r of displayRows) {
+                if (r.lineOld && r.lineOld > maxLineNum) maxLineNum = r.lineOld;
+                if (r.lineNew && r.lineNew > maxLineNum) maxLineNum = r.lineNew;
+            }
+            const LN_W = Math.max(4, String(maxLineNum).length);
+
             const padNum = (n?: number): string => {
                 if (n === undefined) return ' '.repeat(LN_W);
                 const s = String(n);
                 return s.length >= LN_W ? s : ' '.repeat(LN_W - s.length) + s;
             };
+
+            // Consistent gutter: OLD | NEW | SIGN | content
+            const SEP = '\u2502'; // │ vertical bar
 
             // Render a line with word-level highlighting
             const renderHighlightedLine = (content: string, baseColor: string, highlights?: [number, number][]) => {
@@ -899,9 +869,9 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
             };
 
             return (
-                <Box paddingLeft={2} flexDirection="column">
+                <Box paddingLeft={2} flexDirection="column" width="100%">
                     {/* Header bar */}
-                    <Box borderStyle="round" borderColor="#333" paddingX={1} justifyContent="space-between">
+                    <Box borderStyle="round" borderColor="#333" paddingX={1} justifyContent="space-between" width="100%">
                         <Box>
                             <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
                             <Text color="white" bold>{fileName}</Text>
@@ -923,7 +893,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
 
                     {/* Diff block */}
                     {displayRows.length > 0 ? (
-                        <Box flexDirection="column">
+                        <Box flexDirection="column" width="100%">
                             {displayRows.map((row, idx) => {
                                 if (row.type === 'summary') {
                                     return <Text key={idx} color="#888">{`  ${row.content}`}</Text>;
@@ -931,8 +901,8 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                                 if (row.type === 'hunk') {
                                     return (
                                         <Box key={idx}>
-                                            <Text color="#333">{' '.repeat(LN_W) + ' ' + ' '.repeat(LN_W) + ' '}</Text>
-                                            <Text color="#00BFFF">{row.content}</Text>
+                                            <Text color="#333">{' '.repeat(LN_W)}{SEP}{' '.repeat(LN_W)}{SEP}</Text>
+                                            <Text color="#00BFFF">{` ${row.content}`}</Text>
                                         </Box>
                                     );
                                 }
@@ -940,10 +910,10 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                                     return (
                                         <Box key={idx}>
                                             <Text color="#444">{padNum(row.lineOld)}</Text>
-                                            <Text color="#333">{' '}</Text>
+                                            <Text color="#333">{SEP}</Text>
                                             <Text color="#444">{padNum(row.lineNew)}</Text>
-                                            <Text color="#333">{'  '}</Text>
-                                            <Text color="#555">{row.content}</Text>
+                                            <Text color="#333">{SEP}</Text>
+                                            <Text color="#555">{`  ${row.content}`}</Text>
                                         </Box>
                                     );
                                 }
@@ -951,8 +921,9 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                                     return (
                                         <Box key={idx}>
                                             <Text color="#FF6B6B">{padNum(row.lineOld)}</Text>
-                                            <Text color="#333">{' '}</Text>
+                                            <Text color="#333">{SEP}</Text>
                                             <Text color="#333">{' '.repeat(LN_W)}</Text>
+                                            <Text color="#333">{SEP}</Text>
                                             <Text color="#FF6B6B" bold>{' -'}</Text>
                                             {renderHighlightedLine(row.content, '#FF6B6B', row.highlights)}
                                         </Box>
@@ -962,8 +933,9 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                                     return (
                                         <Box key={idx}>
                                             <Text color="#333">{' '.repeat(LN_W)}</Text>
-                                            <Text color="#333">{' '}</Text>
+                                            <Text color="#333">{SEP}</Text>
                                             <Text color="#00D26A">{padNum(row.lineNew)}</Text>
+                                            <Text color="#333">{SEP}</Text>
                                             <Text color="#00D26A" bold>{' +'}</Text>
                                             {renderHighlightedLine(row.content, '#00D26A', row.highlights)}
                                         </Box>
@@ -983,7 +955,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
         // Read file results
         if (msg.tool_name === 'read_file') {
             return (
-                <Box paddingLeft={2} flexDirection="column">
+                <Box paddingLeft={2} flexDirection="column" width="100%">
                     <Box>
                         <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
                         <Text color="white">{header['PATH'] || ''}</Text>
@@ -995,7 +967,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                         ) : null}
                     </Box>
                     {truncatedBody.trim() ? (
-                        <Box paddingLeft={2}>
+                        <Box paddingLeft={2} width="100%">
                             <Text color="#666" wrap="wrap">{truncatedBody.trim()}</Text>
                         </Box>
                     ) : null}
@@ -1006,14 +978,14 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
         // Directory listing
         if (msg.tool_name === 'list_dir') {
             return (
-                <Box paddingLeft={2} flexDirection="column">
+                <Box paddingLeft={2} flexDirection="column" width="100%">
                     <Box>
                         <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
                         <Text color="white">{header['PATH'] || ''}</Text>
                         <Text color="#555">{` (${header['ENTRIES'] || ''})`}</Text>
                     </Box>
                     {truncatedBody.trim() ? (
-                        <Box paddingLeft={2}>
+                        <Box paddingLeft={2} width="100%">
                             <Text color="#666" wrap="wrap">{truncatedBody.trim()}</Text>
                         </Box>
                     ) : null}
@@ -1024,7 +996,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
         // Stop process / list processes / generic
         if (msg.tool_name === 'stop_process') {
             return (
-                <Box paddingLeft={2} flexDirection="column">
+                <Box paddingLeft={2} flexDirection="column" width="100%">
                     <Box>
                         <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
                         <Text color="white">{header['STOPPED'] || ''}</Text>
@@ -1033,7 +1005,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                         ) : null}
                     </Box>
                     {truncatedBody.trim() ? (
-                        <Box paddingLeft={2}>
+                        <Box paddingLeft={2} width="100%">
                             <Text color="#666" wrap="wrap">{truncatedBody.trim()}</Text>
                         </Box>
                     ) : null}
@@ -1044,7 +1016,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
         // Get logs
         if (msg.tool_name === 'get_logs') {
             return (
-                <Box paddingLeft={2} flexDirection="column">
+                <Box paddingLeft={2} flexDirection="column" width="100%">
                     <Box>
                         <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
                         <Text color="white">{header['COMMAND'] || header['PROCESS_ID'] || ''}</Text>
@@ -1056,7 +1028,28 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                         ) : null}
                     </Box>
                     {truncatedBody.trim() ? (
-                        <Box paddingLeft={2}>
+                        <Box paddingLeft={2} width="100%">
+                            <Text color="#777" wrap="wrap">{truncatedBody.trim()}</Text>
+                        </Box>
+                    ) : null}
+                </Box>
+            );
+        }
+
+        // Send input to process
+        if (msg.tool_name === 'send_input') {
+            return (
+                <Box paddingLeft={2} flexDirection="column" width="100%">
+                    <Box>
+                        <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
+                        <Text color="white">{header['SENT'] ? `Sent "${header['SENT'].replace(/^"|"$/g, '')}"` : ''}</Text>
+                        <Text color="#555">{` to ${header['PROCESS_ID'] || msg.content.match(/to (bg_\d+)/)?.[1] || ''}`}</Text>
+                        {header['STATUS'] ? (
+                            <Text color={header['STATUS'] === 'running' ? '#00D26A' : '#FF6B6B'}>{` (${header['STATUS']})`}</Text>
+                        ) : null}
+                    </Box>
+                    {truncatedBody.trim() ? (
+                        <Box paddingLeft={2} width="100%">
                             <Text color="#777" wrap="wrap">{truncatedBody.trim()}</Text>
                         </Box>
                     ) : null}
@@ -1070,7 +1063,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
             const status = header['STATUS'] || '';
             const size = header['SIZE'] || '';
             return (
-                <Box paddingLeft={2} flexDirection="column">
+                <Box paddingLeft={2} flexDirection="column" width="100%">
                     <Box>
                         <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
                         <Text color="#87CEEB">{url}</Text>
@@ -1082,7 +1075,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                         ) : null}
                     </Box>
                     {truncatedBody.trim() ? (
-                        <Box paddingLeft={2}>
+                        <Box paddingLeft={2} width="100%">
                             <Text color="#666" wrap="wrap">{truncatedBody.trim().substring(0, 600)}{truncatedBody.trim().length > 600 ? '...' : ''}</Text>
                         </Box>
                     ) : null}
@@ -1092,7 +1085,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
 
         // Generic fallback
         return (
-            <Box paddingLeft={2}>
+            <Box paddingLeft={2} width="100%">
                 <Text color={tl.color} bold>{`[${tl.label}] `}</Text>
                 <Text color="#666" wrap="wrap">{msg.content.substring(0, 300)}{msg.content.length > 300 ? '...' : ''}</Text>
             </Box>
@@ -1106,11 +1099,13 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
 
     return (
         <Box flexDirection="column">
-            <Static items={['logo' as const, ...messages]}>
+            <Static items={messages}>
                 {(item, index) => {
-                    if (item === 'logo') {
+                    const msg = item as Message;
+
+                    if (msg.content === '__branding__') {
                         return (
-                            <Box key="branding" flexDirection="column">
+                            <Box key={index} flexDirection="column" width="100%">
                                 {LOGO_LINES.map((line, i) => (
                                     <Text key={i} color="#00D26A">{line}</Text>
                                 ))}
@@ -1119,7 +1114,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                             </Box>
                         );
                     }
-                    const msg = item as Message;
+
                     return (
                     <Box key={index} flexDirection="column">
                         {msg.role === 'user' ? (
@@ -1152,9 +1147,9 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                         {msg.role === 'tool' ? renderToolResult(msg) : null}
 
                         {msg.role === 'system' ? (
-                            <Box paddingLeft={1}>
+                            <Box paddingLeft={2}>
                                 <Text color="#555">{'-- '}</Text>
-                                <Text color="#888">{msg.content}</Text>
+                                <Text color="#888" wrap="wrap">{msg.content}</Text>
                             </Box>
                         ) : null}
                     </Box>
@@ -1163,7 +1158,7 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
             </Static>
 
             {status && !permissionPrompt ? (
-                <Box>
+                <Box paddingLeft={2}>
                     <Spinner type="dots" />
                     <Text color="#666">{' '}{status}</Text>
                     <Text color="#444">{' (Esc to cancel)'}</Text>
@@ -1195,17 +1190,17 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
 
             {!isProcessing && ready && !permissionPrompt ? (
                 <Box flexDirection="column">
-                    <Box borderStyle="round" borderColor={awaitingKey ? '#FFD700' : awaitingModel ? '#87CEEB' : '#00D26A'} paddingX={1}>
-                        <Text color={awaitingKey ? '#FFD700' : awaitingModel ? '#87CEEB' : '#00D26A'}>{awaitingKey ? 'KEY> ' : awaitingModel ? 'MODEL> ' : '> '}</Text>
+                    <Box borderStyle="round" borderColor={awaitingKey ? '#FFD700' : '#00D26A'} paddingX={1}>
+                        <Text color={awaitingKey ? '#FFD700' : '#00D26A'}>{awaitingKey ? 'KEY> ' : '> '}</Text>
                         <TextInput
                             value={input}
                             onChange={setInput}
                             onSubmit={handleSubmit}
-                            placeholder={awaitingKey ? 'Paste your API key here...' : awaitingModel ? 'Enter number or model name...' : 'Type a message... (/ for commands)'}
+                            placeholder={awaitingKey ? 'Paste your API key here...' : 'Type a message... (/ for commands)'}
                             focus={true}
                         />
                     </Box>
-                    {input.startsWith('/') && !awaitingKey && !awaitingModel ? (
+                    {input.startsWith('/') && !awaitingKey ? (
                         <Box flexDirection="column" paddingLeft={3}>
                             {SLASH_COMMANDS
                                 .filter(c => c.cmd.startsWith(input.trim()) || input.trim() === '/')

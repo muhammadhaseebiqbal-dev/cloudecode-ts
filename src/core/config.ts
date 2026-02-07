@@ -20,6 +20,16 @@ const DEFAULT_CONFIG: ConfigType = {
             name: 'Groq',
             model: 'qwen-2.5-coder-32b',
             enabled: true
+        },
+        openrouter: {
+            name: 'OpenRouter',
+            model: 'anthropic/claude-3.5-sonnet',
+            enabled: true
+        },
+        ollama: {
+            name: 'Ollama',
+            model: 'qwen2.5-coder:32b',
+            enabled: true
         }
     },
     theme: 'default',
@@ -55,13 +65,23 @@ export class ConfigManager {
     }
 
     loadEnvKeys() {
-        const key = process.env.GROQ_API_KEY;
-        if (key) {
+        const groqKey = process.env.GROQ_API_KEY;
+        if (groqKey) {
             if (!this.config.providers.groq) {
                 this.config.providers.groq = { name: 'Groq', model: 'qwen-2.5-coder-32b', enabled: true };
             }
             if (!this.config.providers.groq.apiKey) {
-                this.config.providers.groq.apiKey = key;
+                this.config.providers.groq.apiKey = groqKey;
+            }
+        }
+
+        const orKey = process.env.OPENROUTER_API_KEY;
+        if (orKey) {
+            if (!this.config.providers.openrouter) {
+                this.config.providers.openrouter = { name: 'OpenRouter', model: 'anthropic/claude-3.5-sonnet', enabled: true };
+            }
+            if (!this.config.providers.openrouter.apiKey) {
+                this.config.providers.openrouter.apiKey = orKey;
             }
         }
     }

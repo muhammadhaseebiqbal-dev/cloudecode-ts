@@ -1,32 +1,75 @@
 
-import React, { useState, useEffect } from 'react';
-import { Box, Text } from 'ink';
+import React, { useState, useRef } from 'react';
+import { Box } from 'ink';
 import { config } from '../core/config';
 import { Setup } from './Setup';
 import { Chat } from './Chat';
+import { ModelPicker } from './ModelPicker';
+import { printBranding } from '../branding';
+import { fullClear } from '../core/ink';
 
 const App = () => {
-    const [view, setView] = useState<'setup' | 'chat'>('setup');
-    const [configLoaded, setConfigLoaded] = useState(false);
+    // Compute initial view synchronously — no "Loading..." flash
+    const _prov = config.config.provider || 'groq';
+    const _conf = config.getProviderConfig(_prov);
+    const initialView = (_conf?.apiKey && _conf?.model) ? 'chat' : 'setup';
 
-    useEffect(() => {
-        const conf = config.getProviderConfig('groq');
-        if (conf?.apiKey && conf?.model) {
-            setView('chat');
-        } else {
-            setView('setup');
-        }
-        setConfigLoaded(true);
-    }, []);
+    const [view, setView] = useState<'setup' | 'chat' | 'model-select'>(initialView);
+    const [chatKey, setChatKey] = useState(0);
+    // Ref to pass model-change result back to the current Chat instance
+    const modelChangeRef = useRef<{ model: { id: string; contextWindow: number } } | null>(null);
 
-    if (!configLoaded) return <Text>Loading...</Text>;
+    const handleReset = () => {
+        fullClear();
+        printBranding();
+        setView('setup');
+    };
+
+    const handleClear = () => {
+        fullClear();
+        setChatKey(prev => prev + 1);
+    };
+
+    const handleSetupComplete = () => {
+        fullClear();
+        setChatKey(prev => prev + 1);
+        setView('chat');
+    };
+
+    const handleModelChange = () => {
+        fullClear();
+        printBranding();
+        setView('model-select');
+    };
+
+    const handleModelSelected = (model: { id: string; contextWindow: number }) => {
+        const currentProv = config.config.provider || 'groq';
+        config.setModel(currentProv, model.id, model.contextWindow);
+        config.save();
+        modelChangeRef.current = { model };
+        fullClear();
+        setView('chat');
+    };
+
+    const handleModelCancel = () => {
+        fullClear();
+        setView('chat');
+    };
 
     return (
         <Box flexDirection="column">
             {view === 'setup' ? (
-                <Setup onComplete={() => setView('chat')} />
+                <Setup onComplete={handleSetupComplete} />
+            ) : view === 'model-select' ? (
+                <ModelPicker onSelect={handleModelSelected} onCancel={handleModelCancel} />
             ) : (
-                <Chat onReset={() => setView('setup')} />
+                <Chat
+                    key={chatKey}
+                    onReset={handleReset}
+                    onClear={handleClear}
+                    onModelChange={handleModelChange}
+                    modelChangeRef={modelChangeRef}
+                />
             )}
         </Box>
     );

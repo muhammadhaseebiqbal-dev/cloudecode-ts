@@ -36,11 +36,12 @@ export const TOOLS = [
     },
     {
         name: "run_command",
-        description: "Run a shell command. If the command runs longer than 15 seconds (e.g. a dev server), it is automatically backgrounded and a process ID is returned. If a similar server is already running, it will be auto-stopped first. Use get_logs to view output without stopping, or stop_process to terminate.",
+        description: "Run a shell command. If the command runs longer than 15 seconds (e.g. a dev server), it is automatically backgrounded and a process ID is returned. If a similar server is already running, it will be auto-stopped first. Use get_logs to view output without stopping, or stop_process to terminate. Use the 'cwd' parameter to run in a specific directory instead of chaining cd commands.",
         parameters: {
             type: "object",
             properties: {
-                command: { type: "string", description: "Shell command to execute" }
+                command: { type: "string", description: "Shell command to execute" },
+                cwd: { type: "string", description: "Working directory to run the command in (absolute or relative path). Optional — defaults to current working directory." }
             },
             required: ["command"]
         }
@@ -75,6 +76,18 @@ export const TOOLS = [
                 tail: { type: "number", description: "Number of lines to show from the end (default 50)" }
             },
             required: ["process_id"]
+        }
+    },
+    {
+        name: "send_input",
+        description: "Send text input to a running background process's stdin. Use this when a process is waiting for user input (e.g. interactive prompts like 'Would you like to use React Compiler? Y/N'). Send the appropriate response to continue the process. Check logs first to see what the process is asking.",
+        parameters: {
+            type: "object",
+            properties: {
+                process_id: { type: "string", description: "The process ID (e.g. bg_1)" },
+                input: { type: "string", description: "The text to send to the process stdin (e.g. 'N', 'yes', 'my-project')" }
+            },
+            required: ["process_id", "input"]
         }
     },
     {

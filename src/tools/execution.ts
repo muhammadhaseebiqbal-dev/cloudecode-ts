@@ -80,13 +80,15 @@ export class ToolExecutor {
                 case 'list_dir':
                     return await this.listDir(args.path);
                 case 'run_command':
-                    return await this.runCommand(args.command);
+                    return await this.runCommand(args.command, args.cwd);
                 case 'stop_process':
                     return this.stopProcess(args.process_id);
                 case 'list_processes':
                     return this.listProcesses();
                 case 'get_logs':
                     return this.getLogs(args.process_id, args.tail);
+                case 'send_input':
+                    return await this.sendInput(args.process_id, args.input);
                 case 'fetch_url':
                     return await this.fetchUrl(args.url);
                 default:
@@ -189,7 +191,19 @@ export class ToolExecutor {
         return null;
     }
 
-    private async runCommand(command: string): Promise<string> {
+    private async runCommand(command: string, cwdOverride?: string): Promise<string> {
+        // Resolve working directory
+        const effectiveCwd = cwdOverride ? this.resolvePath(cwdOverride) : this.cwd;
+        if (cwdOverride) {
+            if (!await fs.pathExists(effectiveCwd)) {
+                return `ERROR: Directory not found\nPath: ${effectiveCwd}`;
+            }
+            const stat = await fs.stat(effectiveCwd);
+            if (!stat.isDirectory()) {
+                return `ERROR: Not a directory\nPath: ${effectiveCwd}`;
+            }
+        }
+
         try {
             // Handle cd
             const cdMatch = command.match(/^cd\s+(.+)$/i);
@@ -212,7 +226,7 @@ export class ToolExecutor {
             // Auto-kill duplicate servers
             const killMsg = this.autoKillDuplicate(command);
 
-            const child = execa(command, { shell: true, cwd: this.cwd });
+            const child = execa(command, { shell: true, cwd: effectiveCwd, stdin: 'pipe' });
             let stdout = '';
             let stderr = '';
             child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
@@ -257,18 +271,18 @@ export class ToolExecutor {
                 await child;
             } catch (error: any) {
                 const output = (stdout + (stderr ? '\nSTDERR:\n' + stderr : '')).trim();
-                let result = `EXIT: ${error.exitCode || 1}\nCOMMAND: ${command}\nCWD: ${this.cwd}\n---\n${output || error.message}`;
+                let result = `EXIT: ${error.exitCode || 1}\nCOMMAND: ${command}\nCWD: ${effectiveCwd}\n---\n${output || error.message}`;
                 if (killMsg) result = killMsg + '\n' + result;
                 return result;
             }
 
             const output = (stdout + (stderr ? '\nSTDERR:\n' + stderr : '')).trim();
-            let result = `EXIT: 0\nCOMMAND: ${command}\nCWD: ${this.cwd}\n---\n${output || '(no output)'}`;
+            let result = `EXIT: 0\nCOMMAND: ${command}\nCWD: ${effectiveCwd}\n---\n${output || '(no output)'}`;
             if (killMsg) result = killMsg + '\n' + result;
             return result;
 
         } catch (error: any) {
-            return `EXIT: ${error.exitCode || 1}\nCOMMAND: ${command}\nCWD: ${this.cwd}\n---\n${error.message}`;
+            return `EXIT: ${error.exitCode || 1}\nCOMMAND: ${command}\nCWD: ${effectiveCwd}\n---\n${error.message}`;
         }
     }
 
@@ -320,6 +334,41 @@ export class ToolExecutor {
         result += `\n---\n${displayLines.join('\n') || '(no output)'}`;
 
         return result;
+    }
+
+    /**
+     * Send input text to a background process's stdin.
+     * Useful for interactive prompts (e.g. create-next-app asking questions).
+     */
+    private async sendInput(processId: string, input: string): Promise<string> {
+        const proc = this.processes.get(processId);
+        if (!proc) {
+            const ids = Array.from(this.processes.keys());
+            return `ERROR: Process "${processId}" not found\nActive processes: ${ids.length > 0 ? ids.join(', ') : 'none'}`;
+        }
+
+        if (!proc.running) {
+            return `ERROR: Process "${processId}" is no longer running (exit code: ${proc.exitCode})`;
+        }
+
+        if (!proc.child.stdin) {
+            return `ERROR: Process "${processId}" does not have an open stdin`;
+        }
+
+        try {
+            proc.child.stdin.write(input + '\n');
+            // Wait a moment for the process to react, then return recent output
+            return new Promise<string>((resolve) => {
+                setTimeout(() => {
+                    const recentOutput = (proc.stdout + (proc.stderr ? '\nSTDERR:\n' + proc.stderr : '')).trim();
+                    const lines = recentOutput.split('\n');
+                    const lastLines = lines.slice(-20).join('\n');
+                    resolve(`SENT: "${input}" to ${processId}\nSTATUS: ${proc.running ? 'running' : 'exited'}\n---\n${lastLines || '(waiting for output...)'}`);
+                }, 1500);
+            });
+        } catch (error: any) {
+            return `ERROR: Failed to send input to "${processId}": ${error.message}`;
+        }
     }
 
     private listProcesses(): string {
