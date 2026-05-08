@@ -41,7 +41,8 @@ import { config } from './config';
  * Because the entire request must fit within TPM for a single call.
  */
 export function getContextWindow(model: string): number {
-    const providerConfig = config.getProviderConfig('groq');
+    const providerName = config.config.provider || 'groq';
+    const providerConfig = config.getProviderConfig(providerName);
 
     let modelCtx = 32768; // fallback
     if (providerConfig?.contextWindow && providerConfig.model === model) {

@@ -7,6 +7,7 @@ import { config } from '../core/config';
 import { GroqProvider } from '../providers/groq';
 import { OpenRouterProvider } from '../providers/openrouter';
 import { OllamaProvider } from '../providers/ollama';
+import { GoogleAIStudioProvider } from '../providers/googleaistudio';
 
 
 interface SetupProps {
@@ -19,6 +20,7 @@ const VISIBLE_COUNT = 10;
 const PROVIDERS = [
     { id: 'groq', name: 'Groq', desc: 'Fast inference — requires API key', color: '#F55036', needsKey: true, keyUrl: 'https://console.groq.com/keys', placeholder: 'gsk_...' },
     { id: 'openrouter', name: 'OpenRouter', desc: 'Multi-model gateway — requires API key', color: '#6366F1', needsKey: true, keyUrl: 'https://openrouter.ai/keys', placeholder: 'sk-or-...' },
+    { id: 'googleaistudio', name: 'Google AI Studio', desc: 'Gemma/Gemini models — requires API key', color: '#87CEEB', needsKey: true, keyUrl: 'https://aistudio.google.com/app/apikey', placeholder: 'AIza...' },
     { id: 'ollama', name: 'Ollama', desc: 'Local models — no API key needed', color: '#FFFFFF', needsKey: false, keyUrl: '', placeholder: '' },
 ];
 
@@ -95,6 +97,7 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
         switch (providerId) {
             case 'openrouter': return new OpenRouterProvider(key);
             case 'ollama': return new OllamaProvider('');
+            case 'googleaistudio': return new GoogleAIStudioProvider(key);
             default: return new GroqProvider(key);
         }
     };
@@ -104,6 +107,7 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
         switch (providerId) {
             case 'openrouter': return OpenRouterProvider.fetchModels(key);
             case 'ollama': return OllamaProvider.fetchModels('');
+            case 'googleaistudio': return GoogleAIStudioProvider.fetchModels(key);
             default: return GroqProvider.fetchModels(key);
         }
     };
@@ -113,6 +117,7 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
         switch (providerId) {
             case 'openrouter': return OpenRouterProvider.probeRateLimit(key, modelId);
             case 'ollama': return OllamaProvider.probeRateLimit('', modelId);
+            case 'googleaistudio': return GoogleAIStudioProvider.probeRateLimit(key, modelId);
             default: return GroqProvider.probeRateLimit(key, modelId);
         }
     };

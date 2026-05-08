@@ -3,6 +3,7 @@ import { config } from './config';
 import { GroqProvider } from '../providers/groq';
 import { OpenRouterProvider } from '../providers/openrouter';
 import { OllamaProvider } from '../providers/ollama';
+import { GoogleAIStudioProvider } from '../providers/googleaistudio';
 import { BaseProvider } from '../providers/base';
 
 export function getProvider(name?: string): BaseProvider {
@@ -17,6 +18,9 @@ export function getProvider(name?: string): BaseProvider {
             return new OpenRouterProvider(apiKey, model);
         case 'ollama':
             return new OllamaProvider(apiKey, model);
+        case 'googleaistudio':
+            if (!apiKey) throw new Error('Google AI Studio API key not configured. Please run setup first.');
+            return new GoogleAIStudioProvider(apiKey, model);
         case 'groq':
         default:
             if (!apiKey) throw new Error('API key not configured. Please run setup first.');

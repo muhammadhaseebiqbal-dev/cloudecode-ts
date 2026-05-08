@@ -26,6 +26,11 @@ const DEFAULT_CONFIG: ConfigType = {
             model: 'anthropic/claude-3.5-sonnet',
             enabled: true
         },
+        googleaistudio: {
+            name: 'Google AI Studio',
+            model: 'gemini-1.5-flash',
+            enabled: true
+        },
         ollama: {
             name: 'Ollama',
             model: 'qwen2.5-coder:32b',
@@ -82,6 +87,16 @@ export class ConfigManager {
             }
             if (!this.config.providers.openrouter.apiKey) {
                 this.config.providers.openrouter.apiKey = orKey;
+            }
+        }
+
+        const googleKey = process.env.GOOGLE_AI_STUDIO_API_KEY;
+        if (googleKey) {
+            if (!this.config.providers.googleaistudio) {
+                this.config.providers.googleaistudio = { name: 'Google AI Studio', model: 'gemini-1.5-flash', enabled: true };
+            }
+            if (!this.config.providers.googleaistudio.apiKey) {
+                this.config.providers.googleaistudio.apiKey = googleKey;
             }
         }
     }

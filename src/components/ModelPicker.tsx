@@ -6,6 +6,7 @@ import { config } from '../core/config';
 import { GroqProvider } from '../providers/groq';
 import { OpenRouterProvider } from '../providers/openrouter';
 import { OllamaProvider } from '../providers/ollama';
+import { GoogleAIStudioProvider } from '../providers/googleaistudio';
 
 interface ModelPickerProps {
     onSelect: (model: { id: string; contextWindow: number }) => void;
@@ -23,6 +24,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ onSelect, onCancel }) 
 
     const currentProv = config.config.provider || 'groq';
     const activeModel = config.getProviderConfig(currentProv)?.model || '';
+    const providerName = config.getProviderConfig(currentProv)?.name || currentProv;
 
     useEffect(() => {
         const fetchModels = async () => {
@@ -33,6 +35,10 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ onSelect, onCancel }) 
                     case 'openrouter':
                         if (!apiKey) throw new Error('No API key configured');
                         fetched = await OpenRouterProvider.fetchModels(apiKey);
+                        break;
+                    case 'googleaistudio':
+                        if (!apiKey) throw new Error('No API key configured');
+                        fetched = await GoogleAIStudioProvider.fetchModels(apiKey);
                         break;
                     case 'ollama':
                         fetched = await OllamaProvider.fetchModels('');
@@ -103,8 +109,8 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ onSelect, onCancel }) 
     if (loading) {
         return (
             <Box flexDirection="column" width="100%">
-                <Box flexDirection="column" borderStyle="round" borderColor="#87CEEB" paddingX={2} width="100%">
-                    <Text bold color="#87CEEB">{`Select Model — ${currentProv}`}</Text>
+                <Box flexDirection="column" borderStyle="round" borderColor="#00D26A" paddingX={2} width="100%">
+                    <Text bold color="#00D26A">{`Select Model — ${providerName}`}</Text>
                     <Box>
                         <Spinner type="dots" />
                         <Text color="#666">{' Fetching available models...'}</Text>
@@ -121,9 +127,9 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ onSelect, onCancel }) 
 
     return (
         <Box flexDirection="column" width="100%">
-            <Box flexDirection="column" borderStyle="round" borderColor="#87CEEB" paddingX={2} width="100%">
-                <Text bold color="#87CEEB">{`Select Model — ${currentProv}`}</Text>
-                <Text color="#666">{`${selectedIdx + 1}/${models.length}  |  ↑↓: navigate  |  Enter: select  |  Esc: cancel`}</Text>
+            <Box flexDirection="column" borderStyle="round" borderColor="#00D26A" paddingX={2} width="100%">
+                <Text bold color="#00D26A">{`Select Model — ${providerName}`}</Text>
+                <Text color="#666">{`${selectedIdx + 1}/${models.length}  |  up/down: navigate  |  enter: select  |  esc: cancel`}</Text>
 
                 {hasAbove ? <Text color="#555">{'  ...'}</Text> : null}
 

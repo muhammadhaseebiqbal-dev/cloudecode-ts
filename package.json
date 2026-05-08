@@ -1,6 +1,6 @@
 {
     "name": "cloudecode-ts",
-    "version": "1.0.1",
+    "version": "1.0.3",
     "description": "Cloudé Code CLI - Agentic AI Coding Assistant",
     "main": "dist/cli.js",
     "bin": {

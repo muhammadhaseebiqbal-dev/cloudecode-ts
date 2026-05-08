@@ -75,7 +75,8 @@ export const Chat: React.FC<ChatProps> = ({ onReset, onClear, onModelChange, mod
     const [awaitingKey, setAwaitingKey] = useState(false);
     const abortRef = useRef<AbortController | null>(null);
 
-    const currentModel = config.getProviderConfig('groq')?.model || 'qwen-2.5-coder-32b';
+    const activeProviderName = config.config.provider || 'groq';
+    const currentModel = config.getProviderConfig(activeProviderName)?.model || 'qwen-2.5-coder-32b';
 
     // Update context usage whenever provider history changes
     const updateContextUsage = (p: BaseProvider) => {
@@ -1167,18 +1168,24 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
             ) : null}
 
             {permissionPrompt ? (
-                <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginTop={1}>
-                    <Text bold color="yellow">{'Permission Required'}</Text>
+                <Box flexDirection="column" borderStyle="round" borderColor="#00D26A" paddingX={2} marginTop={1}>
+                    <Text bold color="#00D26A">{'Permission Required'}</Text>
                     <Box>
                         <Text color="white">{`${permissionPrompt.toolName}: `}</Text>
                         <Text color="#888">{fmtArgs(permissionPrompt.args)}</Text>
                     </Box>
-                    <Box marginTop={1}>
-                        <Text color="#00D26A" bold>{'[Y] Allow'}</Text>
-                        <Text color="#555">{' | '}</Text>
-                        <Text color="red" bold>{'[N] Reject'}</Text>
-                        <Text color="#555">{' | '}</Text>
-                        <Text color="#87CEEB" bold>{'[A] Allow for session'}</Text>
+                    <Box marginTop={1} flexDirection="row">
+                        <Box borderStyle="round" borderColor="#00D26A" paddingX={1}>
+                            <Text color="#00D26A" bold>{'[Y] Allow'}</Text>
+                        </Box>
+                        <Text color="#555">{' '}</Text>
+                        <Box borderStyle="round" borderColor="red" paddingX={1}>
+                            <Text color="red" bold>{'[N] Reject'}</Text>
+                        </Box>
+                        <Text color="#555">{' '}</Text>
+                        <Box borderStyle="round" borderColor="#87CEEB" paddingX={1}>
+                            <Text color="#87CEEB" bold>{'[A] Allow Session'}</Text>
+                        </Box>
                     </Box>
                 </Box>
             ) : null}
@@ -1202,7 +1209,8 @@ Be thorough and specific. Include exact file paths, package names, port numbers,
                         />
                     </Box>
                     {input.startsWith('/') && !awaitingKey ? (
-                        <Box flexDirection="column" paddingLeft={3}>
+                        <Box flexDirection="column" borderStyle="round" borderColor="#333" paddingX={2} marginTop={1}>
+                            <Text color="#666">{'Commands'}</Text>
                             {SLASH_COMMANDS
                                 .filter(c => c.cmd.startsWith(input.trim()) || input.trim() === '/')
                                 .map((c, i) => (
